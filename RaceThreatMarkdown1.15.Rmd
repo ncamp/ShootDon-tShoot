@@ -1,0 +1,663 @@
+Race and Threat Priming 
+Nick Camp, Takuya Sawaoka, Erica Yoon
+========================================================
+
+This document contains signal detection analyses for three experiments: *Weapons Bias* (Study I), *Snake Bias* (Study II), and *Control Study* (Study III).  
+
+```{r, include=FALSE}
+rm(list = ls())
+## for bootstrapping 95% confidence intervals
+theta <- function(x,xdata,na.rm=T) {mean(xdata[x],na.rm=na.rm)}
+ci.low <- function(x,na.rm=T) {
+  mean(x,na.rm=na.rm) - quantile(bootstrap(1:length(x),1000,theta,x,na.rm=na.rm)$thetastar,.025,na.rm=na.rm)}
+ci.high <- function(x,na.rm=T) {
+  quantile(bootstrap(1:length(x),1000,theta,x,na.rm=na.rm)$thetastar,.975,na.rm=na.rm) - mean(x,na.rm=na.rm)}
+
+# Multiple plot function
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  require(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+```{r, include=FALSE}
+#libraries
+library(RJSONIO)
+library(plyr)
+library(car)
+library(reshape)
+library(lme4)
+library(lmerTest)
+library(ggplot2)
+library(bootstrap)
+```
+
+
+#Study I: Replicating Weapons Bias
+
+This study was a direct replication of Payne (2001). Participants saw a Black or White prime for Xms, followed by a gun or a tool. S had to respond within a 500ms response window.
+
+```{r,include=FALSE}
+## read in the tab separated values (tsv)
+d <- read.delim("/afs/ir.stanford.edu/users/n/c/ncamp/Data/GunsRawData.tsv", stringsAsFactors = FALSE)
+
+to.data.frame <- function(x) {
+  do.call(data.frame, as.list(x))
+}
+
+## make a long-form data frame containing all the trials
+trials1 <- ddply(d, .(workerid), function(worker) {
+  
+  trials.list.of.vectors <- fromJSON(worker$Answer.data)
+  trials.list.of.demographic <- fromJSON(worker$Answer.demographicsData)
+  
+  ## you can see this "list of vectors" structure by uncommenting the following line:  
+  #### print( str(trials.list.of.vectors) )
+  
+  ## convert every element in trials.list.of.vectors from a vector to a data frame
+  ## (do this by "Map"ping the to.data.frame function over trials.list.of.vectors
+  trials.list.of.dfs <- Map(to.data.frame, trials.list.of.vectors)
+  trials.list.of.demographics <- Map(to.data.frame, trials.list.of.demographic)
+  
+  ## mush all the of the individual data frames into a single data frame
+  trials.df <- do.call(rbind, trials.list.of.dfs) 
+  trials.demographics <- do.call(rbind, trials.list.of.demographics) 
+  data.frame(
+    "workerid" = worker$workerid,
+    trials.df,
+    trials.demographics
+  )
+})
+
+# sort on id, race, and tool
+weaponData<-trials1[order(trials1$workerid,trials1$race,trials1$tool),]
+
+# rename levels
+levels(weaponData$race) <- c("White", "Black")
+levels(weaponData$tool) <- c("Tool", "Gun")
+```
+
+```{r,include=FALSE}
+weaponData = subset(weaponData, Ethnicity != "3")
+```
+
+```{r,include=FALSE}
+shortformWeapon=cast(weaponData,workerid+Age+Male+Ethnicity+SES+ReligiousAffiliation+ReligiousAttendance+Education+Citizen+Political+Comments~race+tool,value='accuracy', fun.aggregate=mean)
+```
+
+###Study I: Computing signal detection stats
+
+For each subject, we calculate bias and sensitivity for BLACK and WHITE targets: 
+
+* Hit is defined as correctly identifying GUN after seeing GUN (accuracy rate for GUN trials)
+
+* False Alarm is defined as incorrectly responding GUN after seeing TOOL (1-accuracy rate for TOOL trials)
+
+
+```{r}
+shortformWeapon$HitRateWhite=shortformWeapon$White_Gun
+shortformWeapon$FARateWhite=1-shortformWeapon$White_Tool
+
+shortformWeapon$HitRateBlack=shortformWeapon$Black_Gun
+shortformWeapon$FARateBlack=1-shortformWeapon$Black_Tool
+
+#If a S has a HR or FAR of 0 or 1, we can't calculate d prime. This adjusts extreme values by limiting these
+#rates to (1/N) and (N-1)/N, where N is the number of trials used to calculate the HR or FAR.
+
+NumTrials=aggregate(tool~workerid+race,data=trials1,length)[1,3];
+
+shortformWeapon$HitRateWhite=recode(shortformWeapon$HitRateWhite,"0=(1/NumTrials);1=((NumTrials-1)/NumTrials)")
+shortformWeapon$HitRateBlack=recode(shortformWeapon$HitRateBlack,"0=(1/NumTrials);1=((NumTrials-1)/NumTrials)")
+
+shortformWeapon$FARateWhite=recode(shortformWeapon$FARateWhite,"0=(1/NumTrials);1=((NumTrials-1)/NumTrials)")
+shortformWeapon$FARateBlack=recode(shortformWeapon$FARateBlack,"0=(1/NumTrials);1=((NumTrials-1)/NumTrials)")
+```
+
+These functions calculate sensitivity (dPrime), bias (beta), and criterion (c) using the HR and FAR.
+
+```{r}
+#D prime and bias functions from Pellier (2002)
+
+#dprime: separation between the signal and the noise distribution, compared against the sd of the noise distribution. Higher dprime means that the signal can more readily be distinguished from the noise.
+
+dprime <- function(hit,fa) {
+  qnorm(hit) - qnorm(fa)
+}
+
+#beta: bias towards responding that the target is present, independent of whether the target actually is present. Higher bias means greater tendency towards responding 'present'. 
+
+beta <- function(hit,fa) {
+  zhr <- qnorm(hit)
+  zfar <- qnorm(fa)
+  exp(-zhr*zhr/2+zfar*zfar/2)
+  
+}
+
+#c is defined as the distance between the criterion and the neutral point, where the noise and signal distributions cross over. Negative values of c signify a bias toward responding yes, whereas positive values signify a bias toward the no response (thecriterion lies to the right of the neutral point).
+
+criterion<-function(hit,fa) {
+  zhr <- qnorm(hit)
+  zfar <- qnorm(fa)
+  -(zfar+zhr)/2
+}
+```
+
+Now we compute sensitivity, bias, and criterion for Black and White primes.
+```{r}
+shortformWeapon$dPrimeWhite=dprime(shortformWeapon$HitRateWhite,shortformWeapon$FARateWhite)
+shortformWeapon$dPrimeBlack=dprime(shortformWeapon$HitRateBlack,shortformWeapon$FARateBlack)
+
+shortformWeapon$biasWhite=beta(shortformWeapon$HitRateWhite,shortformWeapon$FARateWhite)
+shortformWeapon$biasBlack=beta(shortformWeapon$HitRateBlack,shortformWeapon$FARateBlack)
+
+shortformWeapon$criterionWhite=criterion(shortformWeapon$HitRateWhite,shortformWeapon$FARateWhite)
+shortformWeapon$criterionBlack=criterion(shortformWeapon$HitRateBlack,shortformWeapon$FARateBlack)
+```
+
+###Study I: Sensitivity by prime.
+
+```{r, include=FALSE}
+dPrimesWeapons=melt(data.frame(subset(shortformWeapon,select=c("workerid","dPrimeWhite","dPrimeBlack")),id.vars="workerid"))
+dPrimesWeapons=dPrimesWeapons[,c(1,3,4)]
+names(dPrimesWeapons)=c("workerid","race","dPrime")
+dPrimesWeapons$race=recode(dPrimesWeapons$race,"'dPrimeWhite'='White';'dPrimeBlack'='Black'")
+```
+
+```{r,message=FALSE,echo=FALSE}
+ms <- aggregate(dPrime ~ race, dPrimesWeapons, mean)
+mss <- aggregate(dPrime ~ race + workerid, dPrimesWeapons, mean)
+# for CI's
+ms$cih <- aggregate(dPrime ~ race, mss, ci.high)$dPrime
+ms$cil <- aggregate(dPrime ~ race, mss, ci.low)$dPrime
+
+s1dPrime <- qplot(race,dPrime,
+                 fill=race, stat="identity",
+                 geom="bar",
+                 data=ms) +
+  geom_errorbar(aes(ymin=dPrime-cil,ymax=dPrime+cih,width=.2)) +
+  xlab(NULL) + ylab("dPrime") +theme(legend.position="none")+
+  ggtitle("Sensitivity Responding 'Gun'")
+s1dPrime
+```
+
+Stats in lmer:
+```{r}
+weapon.sensitivity <- lmer(dPrime ~ race + (1|workerid), data = dPrimesWeapons);summary(weapon.sensitivity)
+```
+
+###Study I: Bias by prime.
+```{r,include=FALSE}
+biasWeapon=melt(data.frame(subset(shortformWeapon,select=c("workerid","biasWhite","biasBlack")),id.vars="workerid"))
+biasWeapon=biasWeapon[,c(1,3,4)]
+names(biasWeapon)=c("workerid","race","bias")
+biasWeapon$race=recode(biasWeapon$race,"'biasWhite'='White';'biasBlack'='Black'")
+```
+
+```{r,message=FALSE,echo=FALSE}
+ms <- aggregate(bias ~ race, biasWeapon, mean)
+mss <- aggregate(bias ~ race + workerid, biasWeapon, mean)
+# for CI's
+ms$cih <- aggregate(bias ~ race, mss, ci.high)$bias
+ms$cil <- aggregate(bias ~ race, mss, ci.low)$bias
+
+s1bias <- qplot(race,bias,
+                 fill=race, stat="identity",
+                 geom="bar",
+                 data=ms) +
+  geom_errorbar(aes(ymin=bias-cil,ymax=bias+cih,width=.2)) +
+  xlab(NULL) + ylab("bias") +theme(legend.position="none")+
+  ggtitle("Bias Responding 'Gun'")
+s1bias
+```
+
+Stats in lmer:
+```{r}
+weapon.bias <- lmer(bias ~ race + (1|workerid), data = biasWeapon);summary(weapon.bias)
+```
+
+###Study I: Criterion by prime.
+
+```{r,echo=FALSE,message=FALSE}
+criterionWeapon=melt(data.frame(subset(shortformWeapon,select=c("workerid","criterionWhite","criterionBlack")),id.vars="workerid"))
+criterionWeapon=criterionWeapon[,c(1,3,4)]
+names(criterionWeapon)=c("workerid","race","criterion")
+criterionWeapon$race=recode(criterionWeapon$race,"'criterionWhite'='White';'criterionBlack'='Black'")
+```
+
+```{r,echo=FALSE,message=FALSE}
+ms <- aggregate(criterion ~ race, criterionWeapon, mean)
+mss <- aggregate(criterion ~ race + workerid, criterionWeapon, mean)
+# for CI's
+ms$cih <- aggregate(criterion ~ race, mss, ci.high)$criterion
+ms$cil <- aggregate(criterion ~ race, mss, ci.low)$criterion
+
+s1criterion <- qplot(race,criterion,
+               fill=race, stat="identity",
+               geom="bar",
+               data=ms) +
+  geom_errorbar(aes(ymin=criterion-cil,ymax=criterion+cih,width=.2)) +
+  xlab(NULL) + ylab("criterion") +theme(legend.position="none")+
+  ggtitle("Criterion Responding 'Gun'")
+s1criterion
+```
+
+```{r}
+weapon.criterion <- lmer(criterion ~ race + (1|workerid), data = criterionWeapon);summary(weapon.criterion)
+
+#Question: not sure why the workerid variance=0 in the Random Effects. Shouldn't the model be able to fit a participant level intercept across Black and White prime conditions?
+```
+
+Summary: When targets were primed with Black faces, participants were marginally LESS accurate in identifying weapons. There was no difference in bias, but a difference in criterion for responding "gun": participants set a lower criterion after seeing Black faces.
+
+#Study II: Race primes Snake identification
+
+This study was the same design as Study I, only with Snakes substituted for Guns, and Ropes substituted for Tools.
+
+Data setup is hidden, as it is the same as in Study I.
+```{r,message=FALSE,echo=FALSE}
+## read in the tab separated values (tsv)
+d <- read.delim("/afs/ir.stanford.edu/users/n/c/ncamp/Data/SnakesRawData.tsv", stringsAsFactors = FALSE)
+
+to.data.frame <- function(x) {
+  do.call(data.frame, as.list(x))
+}
+
+## make a long-form data frame containing all the trials
+trials1 <- ddply(d, .(workerid), function(worker) {
+  
+  trials.list.of.vectors <- fromJSON(worker$Answer.data)
+  trials.list.of.demographic <- fromJSON(worker$Answer.demographicsData)
+  
+  ## you can see this "list of vectors" structure by uncommenting the following line:  
+  #### print( str(trials.list.of.vectors) )
+  
+  ## convert every element in trials.list.of.vectors from a vector to a data frame
+  ## (do this by "Map"ping the to.data.frame function over trials.list.of.vectors
+  trials.list.of.dfs <- Map(to.data.frame, trials.list.of.vectors)
+  trials.list.of.demographics <- Map(to.data.frame, trials.list.of.demographic)
+  
+  ## mush all the of the individual data frames into a single data frame
+  trials.df <- do.call(rbind, trials.list.of.dfs) 
+  trials.demographics <- do.call(rbind, trials.list.of.demographics) 
+  data.frame(
+    "workerid" = worker$workerid,
+    trials.df,
+    trials.demographics
+  )
+})
+
+# sort on id, race, and snake
+snakeData<-trials1[order(trials1$workerid,trials1$race,trials1$snake),]
+
+# rename levels
+levels(snakeData$race) <- c("White", "Black")
+levels(snakeData$snake) <- c("Rope", "Snake")
+```
+
+```{r, message=FALSE,echo=FALSE}
+snakeData = subset(snakeData, Ethnicity != "3")
+```
+
+```{r, message=FALSE,echo=FALSE}
+shortformSnake=cast(snakeData,workerid+Age+Male+Ethnicity+SES+ReligiousAffiliation+ReligiousAttendance+Education+Citizen+Political+Comments~race+snake,value='accuracy', fun.aggregate=mean)
+```
+
+###Study II: Computing signal detection stats
+
+For each subject, we calculate bias and sensitivity for BLACK and WHITE targets: 
+
+* Hit is defined as correctly identifying SNAKE after seeing SNAKE (accuracy rate for SNAKE trials)
+
+* False Alarm is defined as incorrectly responding SNAKE after seeing ROPE (1-accuracy rate for ROPE trials)
+
+*Omitted syntax below, since it's so similar to Study I
+
+```{r,echo=FALSE,message=FALSE}
+shortformSnake$HitRateWhite=shortformSnake$White_Snake
+shortformSnake$FARateWhite=1-shortformSnake$White_Rope
+
+shortformSnake$HitRateBlack=shortformSnake$Black_Snake
+shortformSnake$FARateBlack=1-shortformSnake$Black_Rope
+
+#If a S has a HR or FAR of 0 or 1, we can't calculate d prime. This adjusts extreme values by limiting these
+#rates to (1/N) and (N-1)/N, where N is the number of trials used to calculate the HR or FAR.
+
+NumTrials=aggregate(snake~workerid+race,data=trials1,length)[1,3];
+
+shortformSnake$HitRateWhite=recode(shortformSnake$HitRateWhite,"0=(1/NumTrials);1=((NumTrials-1)/NumTrials)")
+shortformSnake$HitRateBlack=recode(shortformSnake$HitRateBlack,"0=(1/NumTrials);1=((NumTrials-1)/NumTrials)")
+
+shortformSnake$FARateWhite=recode(shortformSnake$FARateWhite,"0=(1/NumTrials);1=((NumTrials-1)/NumTrials)")
+shortformSnake$FARateBlack=recode(shortformSnake$FARateBlack,"0=(1/NumTrials);1=((NumTrials-1)/NumTrials)")
+```
+
+
+Compute sensitivity, bias, and criterion for Black and White primes...
+```{r,message=FALSE,echo=FALSE}
+shortformSnake$dPrimeWhite=dprime(shortformSnake$HitRateWhite,shortformSnake$FARateWhite)
+shortformSnake$dPrimeBlack=dprime(shortformSnake$HitRateBlack,shortformSnake$FARateBlack)
+
+shortformSnake$biasWhite=beta(shortformSnake$HitRateWhite,shortformSnake$FARateWhite)
+shortformSnake$biasBlack=beta(shortformSnake$HitRateBlack,shortformSnake$FARateBlack)
+
+shortformSnake$criterionWhite=criterion(shortformSnake$HitRateWhite,shortformSnake$FARateWhite)
+shortformSnake$criterionBlack=criterion(shortformSnake$HitRateBlack,shortformSnake$FARateBlack)
+```
+
+###Study II: Sensitivity by prime.
+
+```{r,message=FALSE,echo=FALSE}
+dPrimesSnakes=melt(data.frame(subset(shortformSnake,select=c("workerid","dPrimeWhite","dPrimeBlack")),id.vars="workerid"))
+dPrimesSnakes=dPrimesSnakes[,c(1,3,4)]
+names(dPrimesSnakes)=c("workerid","race","dPrime")
+dPrimesSnakes$race=recode(dPrimesSnakes$race,"'dPrimeWhite'='White';'dPrimeBlack'='Black'")
+```
+
+```{r, echo=FALSE}
+ms <- aggregate(dPrime ~ race, dPrimesSnakes, mean)
+mss <- aggregate(dPrime ~ race + workerid, dPrimesSnakes, mean)
+# for CI's
+ms$cih <- aggregate(dPrime ~ race, mss, ci.high)$dPrime
+ms$cil <- aggregate(dPrime ~ race, mss, ci.low)$dPrime
+
+s2dPrime <- qplot(race,dPrime,
+                 fill=race, stat="identity",
+                 geom="bar",
+                 data=ms) +
+  geom_errorbar(aes(ymin=dPrime-cil,ymax=dPrime+cih,width=.2)) +
+  xlab(NULL) + ylab("dPrime") +theme(legend.position="none")+
+  ggtitle("Sensitivity Responding 'Snake'")
+s2dPrime
+```
+
+Stats in lmer:
+```{r}
+snake.sensitivity <- lmer(dPrime ~ race + (1|workerid), data = dPrimesSnakes);summary(snake.sensitivity)
+```
+
+###Study II: Bias by prime.
+```{r,echo=FALSE,message=FALSE}
+biasSnake=melt(data.frame(subset(shortformSnake,select=c("workerid","biasWhite","biasBlack")),id.vars="workerid"))
+biasSnake=biasSnake[,c(1,3,4)]
+names(biasSnake)=c("workerid","race","bias")
+biasSnake$race=recode(biasSnake$race,"'biasWhite'='White';'biasBlack'='Black'")
+```
+
+```{r,echo=FALSE}
+ms <- aggregate(bias ~ race, biasSnake, mean)
+mss <- aggregate(bias ~ race + workerid, biasSnake, mean)
+# for CI's
+ms$cih <- aggregate(bias ~ race, mss, ci.high)$bias
+ms$cil <- aggregate(bias ~ race, mss, ci.low)$bias
+
+s2bias <- qplot(race,bias,
+                 fill=race, stat="identity",
+                 geom="bar",
+                 data=ms) +
+  geom_errorbar(aes(ymin=bias-cil,ymax=bias+cih,width=.2)) +
+  xlab(NULL) + ylab("bias") +theme(legend.position="none")+
+  ggtitle("Bias for Responding 'Snake'")
+s2bias
+```
+
+Stats in lmer:
+```{r}
+snake.bias <- lmer(bias ~ race + (1|workerid), data = biasSnake);summary(snake.bias)
+```
+
+###Study II: Criterion by prime.
+
+```{r,message=FALSE,echo=FALSE}
+criterionSnake=melt(data.frame(subset(shortformSnake,select=c("workerid","criterionWhite","criterionBlack")),id.vars="workerid"))
+criterionSnake=criterionSnake[,c(1,3,4)]
+names(criterionSnake)=c("workerid","race","criterion")
+criterionSnake$race=recode(criterionSnake$race,"'criterionWhite'='White';'criterionBlack'='Black'")
+```
+
+```{r,echo=FALSE,message=FALSE}
+
+ms <- aggregate(criterion ~ race, criterionSnake, mean)
+mss <- aggregate(criterion ~ race + workerid, criterionSnake, mean)
+# for CI's
+ms$cih <- aggregate(criterion ~ race, mss, ci.high)$criterion
+ms$cil <- aggregate(criterion ~ race, mss, ci.low)$criterion
+
+s2criterion <- qplot(race,criterion,
+               fill=race, stat="identity",
+               geom="bar",
+               data=ms) +
+  geom_errorbar(aes(ymin=criterion-cil,ymax=criterion+cih,width=.2)) +
+  xlab(NULL) + ylab("criterion") +theme(legend.position="none")+
+  ggtitle("Criterion Responding 'Snake' ")
+s2criterion
+```
+
+Stats with lmer:
+```{r}
+snake.criterion <- lmer(criterion ~ race + (1|workerid), data = criterionSnake);summary(snake.criterion)
+```
+
+##Summary: When targets were primed with Black faces, participants set a lower criterion for responding "snake". There were no differences in bias or sensitivity.
+
+
+
+##Control Study
+
+In the control study, S (N=40) had 80 trials where gun or tool images were preceded by an image of static where the face had been in Studies I and II.
+
+To help interpret the control condition, I'm graphing the results next to the Study I results.
+
+
+```{r,echo=FALSE,message=FALSE}
+## read in the tab separated values (tsv)
+d <- read.delim("/afs/ir.stanford.edu/users/n/c/ncamp/Data/GunsControlRawData.tsv", stringsAsFactors = FALSE)
+
+to.data.frame <- function(x) {
+  do.call(data.frame, as.list(x))
+}
+
+## make a long-form data frame containing all the trials
+trials1 <- ddply(d, .(workerid), function(worker) {
+  
+  trials.list.of.vectors <- fromJSON(worker$Answer.data)
+  trials.list.of.demographic <- fromJSON(worker$Answer.demographicsData)
+  
+  ## you can see this "list of vectors" structure by uncommenting the following line:  
+  #### print( str(trials.list.of.vectors) )
+  
+  ## convert every element in trials.list.of.vectors from a vector to a data frame
+  ## (do this by "Map"ping the to.data.frame function over trials.list.of.vectors
+  trials.list.of.dfs <- Map(to.data.frame, trials.list.of.vectors)
+  trials.list.of.demographics <- Map(to.data.frame, trials.list.of.demographic)
+  
+  ## mush all the of the individual data frames into a single data frame
+  trials.df <- do.call(rbind, trials.list.of.dfs) 
+  trials.demographics <- do.call(rbind, trials.list.of.demographics) 
+  data.frame(
+    "workerid" = worker$workerid,
+    trials.df,
+    trials.demographics
+  )
+})
+
+# sort on id, race, and tool
+weaponControlData<-trials1[order(trials1$workerid,trials1$tool),]
+
+# rename levels
+levels(weaponControlData$tool) <- c("Tool", "Gun")
+
+
+shortformweaponControl=cast(weaponControlData,workerid+Age+Male+Ethnicity+SES+ReligiousAffiliation+ReligiousAttendance+Education+Citizen+Political+Comments~tool,value='accuracy', fun.aggregate=mean)
+
+shortformweaponControl$HitRate=shortformweaponControl$Gun
+shortformweaponControl$FARate=1-shortformweaponControl$Tool
+
+#If a S has a HR or FAR of 0 or 1, we can't calculate d prime. This adjusts extreme values by limiting these
+#rates to (1/N) and (N-1)/N, where N is the number of trials used to calculate the HR or FAR.
+
+NumTrials=aggregate(tool~workerid,data=trials1,length)[1,2];
+
+shortformweaponControl$HitRate=recode(shortformweaponControl$HitRate,"0=(1/NumTrials);1=((NumTrials-1)/NumTrials)")
+shortformweaponControl$FARate=recode(shortformweaponControl$FARate,"0=(1/NumTrials);1=((NumTrials-1)/NumTrials)")
+
+shortformweaponControl$dPrime=dprime(shortformweaponControl$HitRate,shortformweaponControl$FARate)
+shortformweaponControl$bias=beta(shortformweaponControl$HitRate,shortformweaponControl$FARate)
+shortformweaponControl$criterion=criterion(shortformweaponControl$HitRate,shortformweaponControl$FARate)
+```
+
+
+###Control: Sensitivity.
+```{r,echo=FALSE,message=FALSE}
+
+dPrimeWeapon=melt(data.frame(subset(shortformWeapon,select=c("workerid","dPrimeWhite","dPrimeBlack")),id.vars="workerid"))
+dPrimeWeapon=dPrimeWeapon[,c(1,3,4)]
+names(dPrimeWeapon)=c("workerid","race","dPrime")
+dPrimeWeapon$race=recode(dPrimeWeapon$race,"'dPrimeWhite'='White (Study 1)';'dPrimeBlack'='Black (Study 1)'")
+
+ms <- aggregate(dPrime ~ race, dPrimeWeapon, mean)
+mss <- aggregate(dPrime ~ race + workerid, dPrimeWeapon, mean)
+# for CI's
+ms$cih <- aggregate(dPrime ~ race, mss, ci.high)$dPrime
+ms$cil <- aggregate(dPrime ~ race, mss, ci.low)$dPrime
+
+#Just going to shove the control condition in here...
+
+dPrimeWeaponControl=melt(data.frame(subset(shortformweaponControl,select=c("workerid","dPrime")),id.vars="workerid"))
+dPrimeWeaponControl=dPrimeWeaponControl[,c(1,3,4)]
+names(dPrimeWeaponControl)=c("workerid","race","dPrime")
+dPrimeWeaponControl$race=recode(dPrimeWeaponControl$race,"'dPrime'='Control'")
+
+ms2 <- aggregate(dPrime ~ race, dPrimeWeaponControl, mean)
+mss2 <- aggregate(dPrime ~ race + workerid, dPrimeWeaponControl, mean)
+# for CI's
+ms2$cih <- aggregate(dPrime ~ race, mss2, ci.high)$dPrime
+ms2$cil <- aggregate(dPrime ~ race, mss2, ci.low)$dPrime
+ms=rbind(ms,ms2)
+cdPrime <- qplot(race,dPrime,
+               fill=race, stat="identity",
+               geom="bar",
+               data=ms) +
+  geom_errorbar(aes(ymin=dPrime-cil,ymax=dPrime+cih,width=.2)) +
+  xlab(NULL) + ylab("dPrime") + geom_bar(data=ms)+theme(legend.position="none")+
+  ggtitle("dPrime Black/White/Control")
+cdPrime
+```
+
+###Control: Bias.
+```{r,echo=FALSE,message=FALSE}
+
+biasWeapon=melt(data.frame(subset(shortformWeapon,select=c("workerid","biasWhite","biasBlack")),id.vars="workerid"))
+biasWeapon=biasWeapon[,c(1,3,4)]
+names(biasWeapon)=c("workerid","race","bias")
+biasWeapon$race=recode(biasWeapon$race,"'biasWhite'='White (Study 1)';'biasBlack'='Black (Study 1)'")
+
+ms <- aggregate(bias ~ race, biasWeapon, mean)
+mss <- aggregate(bias ~ race + workerid, biasWeapon, mean)
+# for CI's
+ms$cih <- aggregate(bias ~ race, mss, ci.high)$bias
+ms$cil <- aggregate(bias ~ race, mss, ci.low)$bias
+
+#Just going to shove the control condition in here...
+
+biasWeaponControl=melt(data.frame(subset(shortformweaponControl,select=c("workerid","bias")),id.vars="workerid"))
+biasWeaponControl=biasWeaponControl[,c(1,3,4)]
+names(biasWeaponControl)=c("workerid","race","bias")
+biasWeaponControl$race=recode(biasWeaponControl$race,"'bias'='Control'")
+
+ms2 <- aggregate(bias ~ race, biasWeaponControl, mean)
+mss2 <- aggregate(bias ~ race + workerid, biasWeaponControl, mean)
+# for CI's
+ms2$cih <- aggregate(bias ~ race, mss2, ci.high)$bias
+ms2$cil <- aggregate(bias ~ race, mss2, ci.low)$bias
+ms=rbind(ms,ms2)
+cbias <- qplot(race,bias,
+               fill=race, stat="identity",
+               geom="bar",
+               data=ms) +
+  geom_errorbar(aes(ymin=bias-cil,ymax=bias+cih,width=.2)) +
+  xlab(NULL) + ylab("bias") + geom_bar(data=ms)+theme(legend.position="none")+
+  ggtitle("bias Black/White/Control")
+cbias
+```
+
+###Control: Criterion.
+
+```{r,echo=FALSE,message=FALSE}
+
+criterionWeapon=melt(data.frame(subset(shortformWeapon,select=c("workerid","criterionWhite","criterionBlack")),id.vars="workerid"))
+criterionWeapon=criterionWeapon[,c(1,3,4)]
+names(criterionWeapon)=c("workerid","race","criterion")
+criterionWeapon$race=recode(criterionWeapon$race,"'criterionWhite'='White (Study 1)';'criterionBlack'='Black (Study 1)'")
+
+ms <- aggregate(criterion ~ race, criterionWeapon, mean)
+mss <- aggregate(criterion ~ race + workerid, criterionWeapon, mean)
+# for CI's
+ms$cih <- aggregate(criterion ~ race, mss, ci.high)$criterion
+ms$cil <- aggregate(criterion ~ race, mss, ci.low)$criterion
+
+#Just going to shove the control condition in here...
+
+criterionWeaponControl=melt(data.frame(subset(shortformweaponControl,select=c("workerid","criterion")),id.vars="workerid"))
+criterionWeaponControl=criterionWeaponControl[,c(1,3,4)]
+names(criterionWeaponControl)=c("workerid","race","criterion")
+criterionWeaponControl$race=recode(criterionWeaponControl$race,"'criterion'='Control'")
+
+ms2 <- aggregate(criterion ~ race, criterionWeaponControl, mean)
+mss2 <- aggregate(criterion ~ race + workerid, criterionWeaponControl, mean)
+# for CI's
+ms2$cih <- aggregate(criterion ~ race, mss2, ci.high)$criterion
+ms2$cil <- aggregate(criterion ~ race, mss2, ci.low)$criterion
+ms=rbind(ms,ms2)
+ccriterion <- qplot(race,criterion,
+               fill=race, stat="identity",
+               geom="bar",
+               data=ms) +
+  geom_errorbar(aes(ymin=criterion-cil,ymax=criterion+cih,width=.2)) +
+  xlab(NULL) + ylab("criterion") + geom_bar(data=ms)+theme(legend.position="none")+
+  ggtitle("Criterion Black/White/Control")
+ccriterion
+```
+
+##Summary: When objects were primed with static images rather than faces, participants set a criterion that is equal to the the criterion for Black faces in Study I. 
+
+##However, participants were also more sensitive in the control study than they were in Study I. 
