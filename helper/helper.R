@@ -91,6 +91,22 @@ criterion<-function(hit,fa) {
   -(zfar+zhr)/2
 }
 
+#Automatic and controlled estimates. These are from Jacoby (1991) and used by Payne (2001).
+
+#Controlled Estimate: Congruent-Incongruent
+#In other words [false alarm rate] - [hit rate]
+controlled<-function(hit,fa) {
+  hit-fa  
+}
+
+#Automatic Estimate: Incongruent/(1-Controlled)
+#In other words: [false alarm rate]/[1-(false alarm rate-hit rate)]
+automatic<-function(hit,fa){
+  controlled=(hit-fa)
+  fa/(1-controlled)
+}
+
+
 
 reread <- function(worker) {
   trials.list.of.vectors <- fromJSON(worker$Answer.data)

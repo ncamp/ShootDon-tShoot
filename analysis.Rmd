@@ -2,7 +2,17 @@ Race and Threat Priming
 Nick Camp, Takuya Sawaoka, Erica Yoon
 ========================================================
 
-This document contains signal detection analyses for three experiments: *Weapons Bias* (Study I), *Snake Bias* (Study II), *Door/Window Study* (Study III) and *Control Study* (Study IV).  
+This document contains signal detection analyses for three experiments: *Weapons Bias* (Study I), *Snake Bias* (Study II), *Door/Window Study* (Study III) and *Control Study* (Study IV).
+
+The stimuli and task design are almost identical to the original Payne (2001) study: on each trial, participants saw a Black or White face for 200ms, followed by a gun (snake/door) or innocuous tool (rope/window). 
+
+Participants were given a 500ms deadline to respond whether the object was a gun or a tool. If they did not respond within this deadline, a red X appeared on the screen along with instructions to respond more quickly. 
+
+In order to ensure that participants were attending to the task, we modified the original task by asking participants to press the spacebar to advance after each trial. Additionally, we reduced the number of practice trials from 48 to 24 (8 self-paced, 8 with a 1000ms deadline, and 8 with the 500ms deadline) and the number of critical trials from 192 to 80 (40 in the no-prime study).
+
+
+The task is available here:
+http://stanford.edu/~sawaoka/PSYCH241/perceptionStudy2.html
 
 Data Preprocessing
 ------------------
@@ -14,6 +24,7 @@ library(lme4)
 library(lmerTest)
 library(ggplot2)
 library(bootstrap)
+library(dplyr)
 library(tidyr)
 source("helper/helper.R")
 theme_set(theme_bw())
@@ -29,6 +40,16 @@ good_subs <- d %>%
   summarise(accuracy = mean(accuracy))
 
 qplot(accuracy, data=good_subs)
+
+#Accuracy improves when we exclude trials where S did not meet deadline
+
+within_dl <- d %>% 
+  filter(responded==1)%>%
+  group_by(workerid, expt) %>% 
+  summarise(accuracy = mean(accuracy))
+
+qplot(accuracy, data=within_dl)
+
 ```
 
 Vanilla Analyses
@@ -38,7 +59,6 @@ First consolidate across subjects.
 
 ```{r}
 ms.acc <- d %>% 
-  filter(responded == 1) %>%
   group_by(expt, target, prime, workerid) %>%
   summarise(accuracy = mean(accuracy)) %>%
   group_by(expt, target, prime, add=FALSE) %>%
@@ -61,7 +81,6 @@ Then reaction time. Should we filter only correct trials?
 
 ```{r}
 ms.rt <- d %>% 
-  filter(responded == 1 & accuracy == 1) %>%
   group_by(expt, target, prime, workerid) %>%
   summarise(rt = mean(rt)) %>%
   group_by(expt, target, prime, add=FALSE) %>%
@@ -72,15 +91,34 @@ ms.rt <- d %>%
 
 qplot(prime, rt, fill = target, 
       geom = "bar", position = "dodge", stat = "identity",
-      data = ms) + 
+      data = ms.rt) + 
   geom_linerange(aes(ymin = rt - rt.cil, 
                      ymax = rt + rt.cih), 
                  position = position_dodge(width = .9)) + 
   facet_grid(.~expt, scales="free_x")
 ```
 
+Proportion of trials where S respond within deadline differs by prime/experiment...
+```{r}
+ms.resp <- d %>% 
+  group_by(expt, target, prime, workerid) %>%
+  summarise(responded = mean(responded)) %>%
+  group_by(expt, target, prime, add=FALSE) %>%
+  summarise(resp.cih = ci.high(responded), 
+            resp.cil = ci.low(responded),
+            respm = mean(responded), 
+            n = n())
 
-Signal Detection
+qplot(prime, respm, fill = target, 
+      geom = "bar", position = "dodge", stat = "identity",
+      data = ms.resp) + 
+  geom_linerange(aes(ymin = respm - resp.cil, 
+                     ymax = respm + resp.cih), 
+                 position = position_dodge(width = .9)) + 
+  facet_grid(.~expt, scales="free_x")+ ylab("proportion within deadline")
+```
+
+Signal Detection & PDP Stats
 ----------------
 
 For each subject, we calculate bias and sensitivity for BLACK and WHITE targets: 
@@ -114,4 +152,123 @@ qplot(prime, value, fill = prime,
                      ymax = value + cih), 
                  position = position_dodge(width = .9)) + 
   facet_grid(signal~expt, scales="free")
+
+```
+
+PDP Analyses: These analyses use the automatic and controlled estimates from Payne (2001). 
+
+```{r}
+pdp <- d %>%
+  mutate(hit = target == "threat" & accuracy == 1, 
+         miss = target == "threat" & accuracy == 0, 
+         cr = target == "neutral" & accuracy == 1, 
+         fa = target == "neutral" & accuracy == 0) %>%
+  group_by(expt, prime, workerid) %>%
+  summarise(hits = mean(c(hit, 1)),
+            fas = mean(c(fa, 1))) %>%
+  mutate(autoPDP = automatic(hits, fas),
+         contPDP = controlled(hits, fas)
+         ) %>%
+  gather(signal, value, autoPDP, contPDP) %>%
+  group_by(expt, prime, signal) %>%
+  summarise(cih = ci.high(value), 
+            cil = ci.low(value), 
+            value = mean(value, na.rm=TRUE))
+  
+quartz()
+qplot(prime, value, fill = prime, 
+      geom = "bar", position = "dodge", stat = "identity",
+      data = sdt) + 
+  geom_linerange(aes(ymin = value - cil, 
+                     ymax = value + cih), 
+                 position = position_dodge(width = .9)) + 
+  facet_grid(signal~expt, scales="free")
+```
+
+
+Analyses using only responses made within the deadline:
+```{r}
+#This is the same analysis, but only for trials where participants responded within the response deadline.
+dDL<- d %>%
+  filter(responded==1)
+
+sdtDL <- dDL %>%
+  mutate(hit = target == "threat" & accuracy == 1, 
+         miss = target == "threat" & accuracy == 0, 
+         cr = target == "neutral" & accuracy == 1, 
+         fa = target == "neutral" & accuracy == 0) %>%
+  group_by(expt, prime, workerid) %>%
+  summarise(hits = mean(c(hit, 1)),
+            fas = mean(c(fa, 1))) %>%
+  mutate(dprime = dprime(hits, fas),
+         bias = beta(hits, fas), 
+         criterion = criterion(hits, fas)) %>%
+  gather(signal, value, dprime, bias, criterion) %>%
+  group_by(expt, prime, signal) %>%
+  summarise(cih = ci.high(value), 
+            cil = ci.low(value), 
+            value = mean(value, na.rm=TRUE))
+  
+quartz()
+qplot(prime, value, fill = prime, 
+      geom = "bar", position = "dodge", stat = "identity",
+      data = sdt) + 
+  geom_linerange(aes(ymin = value - cil, 
+                     ymax = value + cih), 
+                 position = position_dodge(width = .9)) + 
+  facet_grid(signal~expt, scales="free")
+```
+
+```{r}
+pdpDL <- dDL %>%
+  mutate(hit = target == "threat" & accuracy == 1, 
+         miss = target == "threat" & accuracy == 0, 
+         cr = target == "neutral" & accuracy == 1, 
+         fa = target == "neutral" & accuracy == 0) %>%
+  group_by(expt, prime, workerid) %>%
+  summarise(hits = mean(c(hit, 1)),
+            fas = mean(c(fa, 1))) %>%
+  mutate(autoPDP = automatic(hits, fas),
+         contPDP = controlled(hits, fas)
+         ) %>%
+  gather(signal, value, autoPDP, contPDP) %>%
+  group_by(expt, prime, signal) %>%
+  summarise(cih = ci.high(value), 
+            cil = ci.low(value), 
+            value = mean(value, na.rm=TRUE))
+  
+quartz()
+qplot(prime, value, fill = prime, 
+      geom = "bar", position = "dodge", stat = "identity",
+      data = pdp) + 
+  geom_linerange(aes(ymin = value - cil, 
+                     ymax = value + cih), 
+                 position = position_dodge(width = .9)) + 
+  facet_grid(signal~expt, scales="free")
+```
+
+#Analyses
+```{r}
+Analyses <- d %>%
+  filter(responded==1)%>%
+  mutate(hit = target == "threat" & accuracy == 1, 
+         miss = target == "threat" & accuracy == 0, 
+         cr = target == "neutral" & accuracy == 1, 
+         fa = target == "neutral" & accuracy == 0) %>%
+  group_by(workerid, prime,expt) %>%
+  summarise(hits = mean(c(hit, 1)),
+            fas = mean(c(fa, 1))) %>%
+  mutate(autoPDP = automatic(hits, fas),
+         contPDP = controlled(hits, fas),
+         dprime = dprime(hits, fas),
+         bias = beta(hits, fas), 
+         criterion = criterion(hits, fas)
+         ) %>%
+  gather(signal, value, autoPDP, contPDP,dprime,bias,criterion) %>%
+  group_by(expt,workerid, prime, signal)
+```
+
+
+```{r}
+weapon.dPrime <- lmer(value ~ prime + (1|workerid), data = subset(Analyses,expt=="Face->Snake"&signal=="autoPDP"));summary(weapon.dPrime)
 ```
